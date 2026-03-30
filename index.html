@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ngọc</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+    <div class="dashboard-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <div class="logo-icon"><i class="fas fa-wave-square"></i></div>
+                <span>Babi Ngọc</span>
+            </div>
+            <nav class="nav-menu">
+                <a href="#" class="nav-item active"><i class="fas fa-home"></i> <span>Dashboard</span></a>
+                <a href="#" class="nav-item"><i class="fas fa-history"></i> <span>Lịch sử</span></a>
+                <a href="#" class="nav-item"><i class="fas fa-cog"></i> <span>Cài đặt</span></a>
+            </nav>
+            <div class="sidebar-footer">
+                <p>v1.0.0 Pro</p>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-bar">
+                <div class="search-box">
+                    <i class="fas fa-link"></i>
+                    <input type="text" id="targetUrl" placeholder="Dán link FlipBuilder tại đây (ví dụ: https://online.flipbuilder.com/...)">
+                    <button id="extractBtn" class="btn-primary">Chiết xuất <i class="fas fa-bolt"></i></button>
+                </div>
+                <div class="user-profile">
+                    <div class="theme-toggle" id="themeToggle"><i class="fas fa-moon"></i></div>
+                    <div class="avatar"><img src="https://ui-avatars.com/api/?name=Admin&background=random" alt="Avatar"></div>
+                </div>
+            </header>
+
+            <div class="content-wrapper">
+                <!-- User Guide -->
+                <section class="guide-section">
+                    <div class="guide-card">
+                        <div class="guide-header"><i class="fas fa-info-circle"></i> <span>Hướng dẫn</span></div>
+                        <div class="guide-content">
+                            <p>1. <b>Em coppy cái link host</b>: https://online.flipbuilder.com/sdtta/fylj/ dán lên ô trên á bé<b> Không bấm nút chiết xuất</b>.</p>
+                            <p>2. <b>Mở nhập thủ công</b>: qua link config này https://online.flipbuilder.com/sdtta/fylj/mobile/javascript/config.js em Ctr + A , Ctr + C</p>
+                            <p>3. <b>Dán vào</b>: Bấm Phân tích thủ công rùi em nhấn nút mở tab nha là lụm</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-info">
+                            <h3>Tổng tệp MP3</h3>
+                            <p id="totalAudios">0</p>
+                        </div>
+                        <div class="stat-icon icon-blue"><i class="fas fa-music"></i></div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-info">
+                            <h3>Số trang sách</h3>
+                            <p id="totalPages">0</p>
+                        </div>
+                        <div class="stat-icon icon-purple"><i class="fas fa-book-open"></i></div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-info">
+                            <h3>Trạng thái</h3>
+                            <p id="extractionStatus">Sẵn sàng</p>
+                        </div>
+                        <div class="stat-icon icon-green"><i class="fas fa-check-circle"></i></div>
+                    </div>
+                </section>
+
+                <section class="results-section">
+                    <div class="section-header">
+                        <h2>Danh sách âm thanh trích xuất</h2>
+                        <div class="actions">
+                            <button id="manualInputBtn" class="btn-secondary">Nhập thủ công <i class="fas fa-edit"></i></button>
+                        </div>
+                    </div>
+                    
+                    <!-- Manual Input Area (Hidden initially) -->
+                    <div id="manualArea" class="manual-input-area" style="display:none">
+                        <p>Dán nội dung tệp <code>config.js</code> vào đây nếu không thể tự động lấy dữ liệu:</p>
+                        <textarea id="manualConfigText" placeholder="var pageEditor = ..."></textarea>
+                        <button id="parseManualBtn" class="btn-primary">Phân tích thủ công</button>
+                    </div>
+
+                    <div class="table-container">
+                        <table id="audioTable">
+                            <thead>
+                                <tr>
+                                    <th>STT</th>
+                                    <th>Tên bài học / Mục</th>
+                                    <th>Tên tệp gốc</th>
+                                    <th>Trang</th>
+                                    <th style="width: 100px;">Mở</th>
+                                </tr>
+                            </thead>
+                            <tbody id="audioList">
+                                <tr>
+                                    <td colspan="5" class="empty-state">
+                                        <i class="fas fa-search"></i>
+                                        <p>Vui lòng nhập URL để bắt đầu chiết xuất dữ liệu.</p>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+    
+    <!-- Scripts -->
+    <script src="app.js"></script>
+</body>
+</html>
