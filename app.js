@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const audioPreview = document.getElementById('audioPreview');
 
     let extractedData = [];
+    let currentParts = [];
 
     // --- Theme Management ---
     themeToggle.addEventListener('click', () => {
@@ -54,11 +55,15 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!pageEditor) throw new Error('Không tìm thấy dữ liệu pageEditor.');
             extractedData = processAudioData(pageEditor, bmtConfig, baseUrl);
             renderResults(extractedData);
-            
+
+            const totalPages = pageEditor.pageAnnos ? pageEditor.pageAnnos.length : 0;
+            const parts = detectPartsFromBookmarks(bmtConfig, totalPages);
+            currentParts = groupAudiosByPart(extractedData, parts);
+            renderPartSection(currentParts);
+
             totalAudiosEl.innerText = extractedData.length;
-            totalPagesEl.innerText = pageEditor.pageAnnos ? pageEditor.pageAnnos.length : '0';
+            totalPagesEl.innerText = totalPages || '0';
             statusEl.innerText = 'Hoàn tất (Thủ công)';
-            downloadAllBtn.disabled = extractedData.length === 0;
             showToast('Phân tích thủ công thành công!', 'success');
             manualArea.style.display = 'none';
         } catch (e) {
@@ -68,47 +73,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Core Data Fetcher with Proxy Rotation & Direct Fallback ---
     async function fetchWithProxy(url, isRaw = false) {
-        let lastError = null;
-
-        // 1. Try DIRECT first (No Proxy) - sometimes this works and is fastest
+        // 1. Direct (works if server has CORS headers)
         try {
-            console.log(`Trying direct fetch: ${url}`);
-            const directResp = await fetch(url, { mode: 'no-cors' }); 
-            // Note: no-cors doesn't allow reading body, but for <audio> it might be enough.
-            // However, for blob extraction, we need cors.
-            const corsResp = await fetch(url);
-            if (corsResp.ok) {
-                return isRaw ? await corsResp.blob() : await corsResp.text();
-            }
-        } catch (e) {
-            console.warn('Direct fetch blocked by CORS, trying proxies...');
-        }
+            const resp = await fetch(url);
+            if (resp.ok) return isRaw ? await resp.blob() : await resp.text();
+        } catch (e) { /* CORS blocked */ }
 
-        // 2. Rotate through proxies
-        const proxyGenerators = [
-            (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-            (u) => `https://api.allorigins.win/${isRaw ? 'raw?url=' : 'get?url='}${encodeURIComponent(u)}`,
-            (u) => `https://thingproxy.freeboard.io/fetch/${u}`,
+        // 2. Proxies - ordered by reliability for binary files
+        const proxies = isRaw ? [
+            `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+            `https://corsproxy.io/?${encodeURIComponent(url)}`,
+            `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+        ] : [
+            `https://corsproxy.io/?${encodeURIComponent(url)}`,
+            `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+            `https://thingproxy.freeboard.io/fetch/${url}`,
         ];
 
-        for (const getProxyUrl of proxyGenerators) {
+        let lastError;
+        for (const pUrl of proxies) {
             try {
-                const pUrl = getProxyUrl(url);
-                statusEl.innerText = `🔄 Thử qua ${pUrl.split('/')[2]}...`;
-                const response = await fetch(pUrl);
-                if (!response.ok) throw new Error(`Proxy status ${response.status}`);
-                if (isRaw) return await response.blob();
-                if (pUrl.includes('allorigins')) {
-                    const data = await response.json();
+                statusEl.innerText = `Thử ${new URL(pUrl).hostname}...`;
+                const resp = await fetch(pUrl, { signal: AbortSignal.timeout(15000) });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                if (isRaw) {
+                    const blob = await resp.blob();
+                    if (blob.size === 0) throw new Error('Empty response');
+                    return blob;
+                }
+                if (pUrl.includes('allorigins.win/get')) {
+                    const data = await resp.json();
                     return data.contents;
                 }
-                return await response.text();
+                return await resp.text();
             } catch (e) {
-                console.warn(`Proxy failed:`, e);
                 lastError = e;
             }
         }
-        throw new Error(lastError ? lastError.message : 'Tất cả kết nối đều thất bại.');
+        throw new Error(lastError?.message || 'Tất cả proxy thất bại');
     }
 
     // --- Core Logic ---
@@ -125,10 +128,15 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!pageEditor) throw new Error('Không thể phân tích dữ liệu tệp cấu hình.');
             extractedData = processAudioData(pageEditor, bmtConfig, baseUrl);
             renderResults(extractedData);
+
+            const totalPages = pageEditor.pageAnnos ? pageEditor.pageAnnos.length : 0;
+            const parts = detectPartsFromBookmarks(bmtConfig, totalPages);
+            currentParts = groupAudiosByPart(extractedData, parts);
+            renderPartSection(currentParts);
+
             totalAudiosEl.innerText = extractedData.length;
-            totalPagesEl.innerText = pageEditor.pageAnnos ? pageEditor.pageAnnos.length : 'Đã ẩn';
+            totalPagesEl.innerText = totalPages || 'Đã ẩn';
             statusEl.innerText = 'Hoàn tất';
-            downloadAllBtn.disabled = extractedData.length === 0;
             showToast(`Tìm thấy ${extractedData.length} tệp!`, 'success');
         } catch (error) {
             alert('Lỗi: ' + error.message + '\n\nHãy thử dùng tính năng "Nhập thủ công" bên dưới.');
@@ -267,8 +275,228 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    function showOpenLinksBtn(group, nearBtn) {
+        const existing = nearBtn.parentElement.querySelector('.open-links-btn');
+        if (existing) return;
+        const fallback = document.createElement('button');
+        fallback.className = 'btn-download-part open-links-btn';
+        fallback.style.setProperty('--part-color', '#e17055');
+        fallback.style.marginTop = '6px';
+        fallback.innerHTML = '<i class="fas fa-external-link-alt"></i> Mở tất cả links';
+        fallback.onclick = () => {
+            group.audios.forEach((audio, i) => {
+                setTimeout(() => window.open(audio.url, '_blank'), i * 400);
+            });
+            showToast(`Đã mở ${group.audios.length} tab. Nhấn Ctrl+S trên mỗi tab để lưu.`, 'info');
+        };
+        nearBtn.parentElement.appendChild(fallback);
+    }
+
     function startLoading() { extractBtn.disabled = true; extractBtn.classList.add('loading'); }
     function stopLoading() { extractBtn.disabled = false; extractBtn.classList.remove('loading'); }
     function resetUI() { audioList.innerHTML = ''; }
-    function showToast(msg, type) { console.log(`[${type}] ${msg}`); }
+
+    function showToast(msg, type) {
+        const container = document.getElementById('toastContainer');
+        if (!container) return;
+        const colors = { success: '#00b894', error: '#d63031', info: '#74b9ff' };
+        const toast = document.createElement('div');
+        toast.style.cssText = `background:${colors[type]||'#636e72'};color:white;padding:12px 20px;border-radius:12px;font-size:.9rem;font-weight:500;box-shadow:0 4px 20px rgba(0,0,0,.3);animation:fadeIn .3s ease-out;max-width:320px;`;
+        toast.textContent = msg;
+        container.appendChild(toast);
+        setTimeout(() => toast.remove(), 3500);
+    }
+
+    function detectPartsFromBookmarks(bmtConfig, totalPages) {
+        if (!bmtConfig || bmtConfig.length === 0) return null;
+
+        const sorted = [...bmtConfig].sort((a, b) => (a.pageIndex || 0) - (b.pageIndex || 0));
+        const hasChildren = bmtConfig.some(b => b.children && b.children.length > 0);
+
+        if (!hasChildren) {
+            // Flat: mỗi bookmark là một part
+            return sorted.map((bmt, i) => ({
+                title: bmt.title || `Part ${i + 1}`,
+                section: null,
+                startPage: (bmt.pageIndex || 0) + 1,
+                endPage: sorted[i + 1] ? sorted[i + 1].pageIndex : (totalPages || 99999)
+            }));
+        }
+
+        // Nested: top-level = section, children = part
+        const parts = [];
+        sorted.forEach((section, si) => {
+            const nextSection = sorted[si + 1];
+            const sectionEnd = nextSection ? nextSection.pageIndex : (totalPages || 99999);
+
+            if (section.children && section.children.length > 0) {
+                const children = [...section.children].sort((a, b) => (a.pageIndex || 0) - (b.pageIndex || 0));
+                children.forEach((child, ci) => {
+                    parts.push({
+                        title: child.title || `Part ${ci + 1}`,
+                        section: section.title,
+                        startPage: (child.pageIndex || 0) + 1,
+                        endPage: children[ci + 1] ? children[ci + 1].pageIndex : sectionEnd
+                    });
+                });
+            } else {
+                parts.push({
+                    title: section.title || `Phần ${si + 1}`,
+                    section: null,
+                    startPage: (section.pageIndex || 0) + 1,
+                    endPage: sectionEnd
+                });
+            }
+        });
+        return parts;
+    }
+
+    function groupAudiosByPart(audios, parts) {
+        if (!parts || parts.length <= 1) {
+            return audios.length > 0 ? [{ title: 'Tất cả', section: null, audios }] : [];
+        }
+        const groups = parts.map(p => ({ title: p.title, section: p.section, startPage: p.startPage, endPage: p.endPage, audios: [] }));
+        const ungrouped = [];
+        audios.forEach(audio => {
+            const g = groups.find(g => audio.pageNum >= g.startPage && audio.pageNum <= g.endPage);
+            g ? g.audios.push(audio) : ungrouped.push(audio);
+        });
+        if (ungrouped.length > 0) groups.push({ title: 'Khác', section: null, audios: ungrouped });
+        return groups.filter(g => g.audios.length > 0);
+    }
+
+    function renderPartSection(groups) {
+        const partSection = document.getElementById('partSection');
+        if (!partSection || !groups || groups.length <= 1) {
+            if (partSection) partSection.style.display = 'none';
+            return;
+        }
+
+        const palette = ['#ff759f','#6c5ce7','#00b894','#fdcb6e','#e17055','#74b9ff','#fd79a8','#a29bfe','#55efc4','#fab1a0','#ff7675','#dfe6e9'];
+        const hasSections = groups.some(g => g.section);
+        partSection.style.display = 'block';
+
+        let bodyHtml;
+        if (hasSections) {
+            // Gom theo section rồi render từng nhóm
+            const sectionMap = new Map();
+            groups.forEach((g, i) => {
+                const key = g.section || '—';
+                if (!sectionMap.has(key)) sectionMap.set(key, []);
+                sectionMap.get(key).push({ ...g, index: i });
+            });
+
+            const sectionColors = ['#ff759f','#6c5ce7','#00b894','#fdcb6e','#e17055'];
+            let si = 0;
+            bodyHtml = [...sectionMap.entries()].map(([sectionName, parts]) => {
+                const sColor = sectionColors[si++ % sectionColors.length];
+                const partsHtml = parts.map((g, pi) => `
+                    <div class="part-card" style="--part-color:${palette[(si * 3 + pi) % palette.length]}">
+                        <div class="part-header">
+                            <div class="part-icon"><i class="fas fa-folder-open"></i></div>
+                            <div class="part-info">
+                                <h3 class="part-title">${g.title}</h3>
+                                <span>${g.audios.length} file MP3</span>
+                            </div>
+                        </div>
+                        <button class="btn-download-part" onclick="downloadPart(${g.index}, this)">
+                            <i class="fas fa-file-archive"></i> Tải ZIP
+                        </button>
+                    </div>
+                `).join('');
+                return `
+                    <div class="section-group">
+                        <div class="section-group-header" style="--sg-color:${sColor}">
+                            <i class="fas fa-book-open"></i> ${sectionName}
+                        </div>
+                        <div class="parts-grid">${partsHtml}</div>
+                    </div>
+                `;
+            }).join('');
+        } else {
+            bodyHtml = `<div class="parts-grid">
+                ${groups.map((g, i) => `
+                    <div class="part-card" style="--part-color:${palette[i % palette.length]}">
+                        <div class="part-header">
+                            <div class="part-icon"><i class="fas fa-folder-open"></i></div>
+                            <div class="part-info">
+                                <h3 class="part-title">${g.title}</h3>
+                                <span>${g.audios.length} file MP3</span>
+                            </div>
+                        </div>
+                        <button class="btn-download-part" onclick="downloadPart(${i}, this)">
+                            <i class="fas fa-file-archive"></i> Tải ZIP
+                        </button>
+                    </div>
+                `).join('')}
+            </div>`;
+        }
+
+        partSection.innerHTML = `
+            <div class="section-header">
+                <h2><i class="fas fa-layer-group"></i> Tải theo Part</h2>
+                <span class="badge">${groups.length} part · ${hasSections ? [...new Set(groups.map(g=>g.section).filter(Boolean))].length + ' phần' : ''}</span>
+            </div>
+            ${bodyHtml}
+        `;
+    }
+
+    window.downloadPart = async (groupIndex, btn) => {
+        const group = currentParts[groupIndex];
+        if (!group || group.audios.length === 0) return;
+        const oHtml = btn.innerHTML;
+        btn.disabled = true;
+
+        if (typeof JSZip === 'undefined') {
+            showToast('JSZip chưa tải, mở từng link...', 'info');
+            for (const audio of group.audios) window.open(audio.url, '_blank');
+            btn.disabled = false;
+            return;
+        }
+
+        try {
+            const zip = new JSZip();
+            const folderName = group.title.replace(/[<>:"/\\|?*]/g, '_');
+            const folder = zip.folder(folderName);
+            let ok = 0, fail = 0;
+
+            for (let i = 0; i < group.audios.length; i++) {
+                const audio = group.audios[i];
+                btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${i + 1}/${group.audios.length}`;
+                try {
+                    const blob = await fetchWithProxy(audio.url, true);
+                    // Verify it's actually audio (not an error HTML page)
+                    if (blob.type && blob.type.includes('text/html')) throw new Error('Proxy trả về HTML');
+                    folder.file(audio.originalName, blob);
+                    ok++;
+                } catch (e) {
+                    fail++;
+                    console.warn(`✗ ${audio.originalName}:`, e.message);
+                }
+            }
+
+            if (ok === 0) {
+                showToast('Không tải được file nào. Server chặn CORS — dùng nút "Mở Links" bên dưới.', 'error');
+                btn.innerHTML = oHtml; btn.disabled = false;
+                // Show fallback open-links button
+                showOpenLinksBtn(group, btn);
+                return;
+            }
+
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Đang nén...';
+            const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 1 } });
+            const blobUrl = URL.createObjectURL(zipBlob);
+            const a = document.createElement('a');
+            a.href = blobUrl; a.download = `${folderName}.zip`;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+            if (fail > 0) showToast(`Tải ${ok}/${group.audios.length} file (${fail} lỗi proxy).`, 'info');
+            else showToast(`Tải xong "${group.title}" — ${ok} file!`, 'success');
+        } catch (e) {
+            showToast('Lỗi: ' + e.message, 'error');
+        } finally {
+            btn.innerHTML = oHtml;
+            btn.disabled = false;
+        }
+    };
 });
